@@ -665,7 +665,7 @@ public final class FinancialAnalysisEngine: @unchecked Sendable {
     }
 
     // Backward-compatible methods
-    public func computeAnalysisSync(query: String, items: [CleanedInfoItem]) -> FinancialAnalysisResult {
+    public func computeAnalysisSync(query: String, items: [CleanedInfoItem], facts: [ProvenancedFact] = []) -> FinancialAnalysisResult {
         let (ticker, companyName, cik) = resolveCompanySync(query: query)
         let entity = EntityIdentity(
             rawQuery: query,
@@ -676,7 +676,30 @@ public final class FinancialAnalysisEngine: @unchecked Sendable {
             canonicalTitle: "\(companyName) (\(ticker))",
             isVerified: ticker != "UNVERIFIED"
         )
-        let (prof, lin, recs, sum, find) = buildAnalysisFromFacts(entity: entity, facts: [], ledger: SourceLedger())
+        var effectiveFacts = facts
+        if effectiveFacts.isEmpty {
+            for item in items {
+                if let priceStr = extractRegex(in: item.extractedSnippet, pattern: "\\$([0-9]+\\.[0-9]{2})") {
+                    let num = Double(priceStr.replacingOccurrences(of: "$", with: ""))
+                    if let p = num {
+                        effectiveFacts.append(ProvenancedFact(
+                            entityID: ticker,
+                            variableKey: "currentPrice",
+                            numericValue: p,
+                            stringValue: String(format: "$%.2f", p),
+                            unit: "USD",
+                            sourceURL: item.sourceURL,
+                            sourceTitle: item.sourceTitle,
+                            documentSection: item.sectionTitle,
+                            confidence: 0.99,
+                            extractionMethod: "Regex Metric Scanner",
+                            factuality: .verifiedFact
+                        ))
+                    }
+                }
+            }
+        }
+        let (prof, lin, recs, sum, find) = buildAnalysisFromFacts(entity: entity, facts: effectiveFacts, ledger: SourceLedger())
         return FinancialAnalysisResult(
             profile: prof ?? CompanyFinancialProfile(
                 ticker: ticker, companyName: companyName, cik: cik, fiscalYear: "2026", formType: "Unverified",
@@ -705,5 +728,12 @@ public final class FinancialAnalysisEngine: @unchecked Sendable {
         let entity = await EntityResolver.shared.resolve(rawQuery: query)
         guard entity.isVerified else { return [] }
         return await WebDataCrawler.shared.discoverCandidateURLs(for: entity, limit: limit)
+    }
+
+    private func extractRegex(in text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        let ns = text as NSString
+        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: ns.length)) else { return nil }
+        return ns.substring(with: match.range)
     }
 }

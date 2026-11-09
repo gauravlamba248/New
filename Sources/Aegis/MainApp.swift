@@ -8,8 +8,8 @@ public struct AegisApp: App {
 
     public init() {
         if CommandLine.arguments.contains("--self-test") {
-            SelfTestRunner.runAllTests()
-            exit(0)
+            let summary = SelfTestRunner.runAllTests()
+            exit(summary.allPassed ? 0 : 1)
         }
         if CommandLine.arguments.contains("--crawl-test"),
            let queryIdx = CommandLine.arguments.firstIndex(of: "--crawl-test"),
@@ -78,14 +78,64 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+public enum DiagnosticTestStatus: String, Sendable, Codable {
+    case passed = "TEST PASSED"
+    case failed = "TEST FAILED"
+    case skipped = "TEST SKIPPED"
+    case error = "TEST ERROR"
+    case unavailable = "TEST UNAVAILABLE"
+}
+
+public struct SuiteReport: Sendable {
+    public let name: String
+    public var status: DiagnosticTestStatus = .passed
+    public var passedChecks: Int = 0
+    public var failedChecks: Int = 0
+    public var skippedChecks: Int = 0
+    public var failureMessages: [String] = []
+
+    public init(name: String) {
+        self.name = name
+    }
+
+    public mutating func check(_ condition: Bool, _ failureMessage: String, critical: Bool = false) {
+        if condition {
+            passedChecks += 1
+        } else {
+            failedChecks += 1
+            status = .failed
+            failureMessages.append(failureMessage)
+            print("  ⚠️ Check Failed: \(failureMessage)")
+            if critical {
+                fatalError("CRITICAL INVARIANT BREACH: \(failureMessage)")
+            }
+        }
+    }
+}
+
+public struct SelfTestSummary: Sendable {
+    public let suites: [SuiteReport]
+    public var allPassed: Bool {
+        return suites.allSatisfy { $0.status == .passed }
+    }
+    public var totalPassedSuites: Int {
+        return suites.filter { $0.status == .passed }.count
+    }
+    public var totalFailedSuites: Int {
+        return suites.filter { $0.status == .failed }.count
+    }
+}
+
 /// Standalone test suite executing offline assertions without external XCTest dependency
 @MainActor
 public struct SelfTestRunner {
-    public static func runAllTests() {
+    @discardableResult
+    public static func runAllTests() -> SelfTestSummary {
         print("\n=======================================================")
         print("🛡️  AEGIS NATIVE SECURITY ARCHITECTURE - SELF-TEST SUITE")
         print("=======================================================\n")
 
+        var suites: [SuiteReport] = []
         testIntentRouter()
         testAdTrackerBlocker()
         testIPBlocker()
@@ -101,11 +151,21 @@ public struct SelfTestRunner {
         testNativeMailEngine()
         testNativeLLMEngine()
         testDataCollectionAndSorter()
-        testBypassWallSubsystem()
+        let bypassSuite = testBypassWallSubsystem()
+        suites.append(bypassSuite)
 
+        let summary = SelfTestSummary(suites: suites)
         print("\n=======================================================")
-        print("✅ ALL 16 SECURITY, TAB, BOOKMARK, TOR, MAIL, LLM, DATA COLLECTOR & BYPASS WALL TEST SUITES PASSED!")
+        if summary.allPassed {
+            print("✅ ALL 16 SECURITY, TAB, BOOKMARK, TOR, MAIL, LLM, DATA COLLECTOR & BYPASS WALL TEST SUITES PASSED!")
+        } else {
+            print("⚠️ SELF-TEST SUMMARY: \(summary.totalPassedSuites)/\(summary.suites.count) SUITES PASSED, \(summary.totalFailedSuites) FAILED")
+            for suite in summary.suites where suite.status != .passed {
+                print("  ❌ [\(suite.name)]: \(suite.status.rawValue) - \(suite.failureMessages.joined(separator: "; "))")
+            }
+        }
         print("=======================================================\n")
+        return summary
     }
 
     private static func testIntentRouter() {
@@ -782,8 +842,9 @@ public struct SelfTestRunner {
         print("  ✓ Processed \(gatherResult.rawTotalBytes) bytes raw -> \(gatherResult.garbageBytesStripped) bytes garbage stripped.")
     }
 
-    private static func testBypassWallSubsystem() {
+    private static func testBypassWallSubsystem() -> SuiteReport {
         print("[16/16] Testing Bypass Wall, Detection, Extraction & Access-Control Non-Circumvention Subsystem...")
+        var suite = SuiteReport(name: "Bypass Wall Subsystem")
         let detector = BypassWallDetector.shared
         let sanitizer = BypassWallSanitizer.shared
         let decisionEngine = BypassDecisionEngine.shared
@@ -795,7 +856,7 @@ public struct SelfTestRunner {
         <body><article><h1>Open Source Computing</h1><p>Open source computing allows distributed peer verification of algorithms and hardware models.</p><p>Developers across the globe collaborate to audit code and maintain open public standards.</p></article></body></html>
         """
         let class1 = detector.inspectHTMLString(publicHTML)
-        assert(class1 == .none, "❌ Test 1 Failed: Normal public webpage must classify as .none")
+        suite.check(class1 == .none, "❌ Test 1 Failed: Normal public webpage must classify as .none")
 
         // Test 2: Public article with login modal overlay -> Presentation Barrier
         let loginOverlayHTML = """
@@ -814,11 +875,12 @@ public struct SelfTestRunner {
         </body></html>
         """
         let class2 = detector.inspectHTMLString(loginOverlayHTML)
-        guard case .presentationBarrier(let t2, let full2) = class2 else {
-            fatalError("❌ Test 2 Failed: Login overlay with delivered article must be classified as .presentationBarrier")
+        if case .presentationBarrier(let t2, let full2) = class2 {
+            suite.check(t2 == .loginModalOverlay, "❌ Test 2 Failed: Barrier type must be .loginModalOverlay")
+            suite.check(full2 == true, "❌ Test 2 Failed: Full content must be detected in DOM")
+        } else {
+            suite.check(false, "❌ Test 2 Failed: Login overlay with delivered article must be classified as .presentationBarrier (Got \(class2))")
         }
-        assert(t2 == .loginModalOverlay, "❌ Test 2 Failed: Barrier type must be .loginModalOverlay")
-        assert(full2 == true, "❌ Test 2 Failed: Full content must be detected in DOM")
 
         // Test 3: Signup-required page with article in DOM -> Public Content Extracted
         let signupHTML = """
@@ -834,14 +896,15 @@ public struct SelfTestRunner {
         </body></html>
         """
         let class3 = detector.inspectHTMLString(signupHTML)
-        guard case .presentationBarrier(let t3, _) = class3 else {
-            fatalError("❌ Test 3 Failed: Signup wall with delivered article must be .presentationBarrier")
+        if case .presentationBarrier(let t3, _) = class3 {
+            suite.check(t3 == .signupModalOverlay, "❌ Test 3 Failed: Barrier type must be .signupModalOverlay")
+        } else {
+            suite.check(false, "❌ Test 3 Failed: Signup wall with delivered article must be .presentationBarrier (Got \(class3))")
         }
-        assert(t3 == .signupModalOverlay, "❌ Test 3 Failed: Barrier type must be .signupModalOverlay")
 
         let article3 = extractor.extractArticleFromRawHTML(signupHTML, sourceURL: URL(string: "https://example.com/econ"))
-        assert(article3.title.contains("Economic Policy") || article3.title.contains("Global Monetary"), "❌ Test 3 Failed: Title must be extracted")
-        assert(article3.plainText.contains("Central bank digital reserves"), "❌ Test 3 Failed: Body must be extracted")
+        suite.check(article3.title.contains("Economic Policy") || article3.title.contains("Global Monetary"), "❌ Test 3 Failed: Title must be extracted")
+        suite.check(article3.plainText.contains("Central bank digital reserves"), "❌ Test 3 Failed: Body must be extracted")
 
         // Test 4: Paid Subscription Paywall -> Refuse Access Control (Strict Non-Circumvention)
         let paywallHTML = """
@@ -850,17 +913,19 @@ public struct SelfTestRunner {
         </head><body><h2>Subscription Required</h2><p>This premium analysis is exclusively for paying subscribers. Subscribe now to access.</p></body></html>
         """
         let class4 = detector.inspectHTMLString(paywallHTML)
-        guard case .accessControlBarrier(let t4, _) = class4 else {
-            fatalError("❌ Test 4 Failed: Paid paywall must be classified as .accessControlBarrier")
+        if case .accessControlBarrier(let t4, _) = class4 {
+            suite.check(t4 == .paidSubscriptionPaywall, "❌ Test 4 Failed: Barrier type must be .paidSubscriptionPaywall")
+        } else {
+            suite.check(false, "❌ Test 4 Failed: Paid paywall must be classified as .accessControlBarrier (Got \(class4))")
         }
-        assert(t4 == .paidSubscriptionPaywall, "❌ Test 4 Failed: Barrier type must be .paidSubscriptionPaywall")
 
         let decision4 = decisionEngine.decide(classification: class4, payload: DOMInspectionPayload(isAccessibleForFreeFalse: true), sourceURL: URL(string: "https://wsj.com/article"))
-        guard case .refuseAccessControl(let res4) = decision4 else {
-            fatalError("❌ Test 4 Failed: Decision engine MUST refuse paid paywall bypass")
+        if case .refuseAccessControl(let res4) = decision4 {
+            suite.check(res4.isRefusal == true, "❌ Test 4 Failed: Paywall result must be flagged as refusal")
+            suite.check(res4.securityAffirmation.contains("Non-Circumvention"), "❌ Test 4 Failed: Must cite non-circumvention policy")
+        } else {
+            suite.check(false, "❌ Test 4 Failed: Decision engine MUST refuse paid paywall bypass")
         }
-        assert(res4.isRefusal == true, "❌ Test 4 Failed: Paywall result must be flagged as refusal")
-        assert(res4.securityAffirmation.contains("Non-Circumvention"), "❌ Test 4 Failed: Must cite non-circumvention policy")
 
         // Test 5: CAPTCHA Challenge -> Refuse Access Control (Strict Non-Circumvention)
         let captchaHTML = """
@@ -868,10 +933,11 @@ public struct SelfTestRunner {
         <body><div class="cf-turnstile">Verify you are human to continue.</div></body></html>
         """
         let class5 = detector.inspectHTMLString(captchaHTML)
-        guard case .accessControlBarrier(let t5, _) = class5 else {
-            fatalError("❌ Test 5 Failed: CAPTCHA must be classified as .accessControlBarrier")
+        if case .accessControlBarrier(let t5, _) = class5 {
+            suite.check(t5 == .captchaChallenge, "❌ Test 5 Failed: Barrier type must be .captchaChallenge")
+        } else {
+            suite.check(false, "❌ Test 5 Failed: CAPTCHA must be classified as .accessControlBarrier (Got \(class5))")
         }
-        assert(t5 == .captchaChallenge, "❌ Test 5 Failed: Barrier type must be .captchaChallenge")
 
         // Test 6: Private Authenticated Page -> Refuse Access Control
         let authHTML = """
@@ -879,10 +945,11 @@ public struct SelfTestRunner {
         <body><form action="/login"><p>Sign in to continue to your private account.</p><input type="password"/><button>Log In</button></form></body></html>
         """
         let class6 = detector.inspectHTMLString(authHTML)
-        guard case .accessControlBarrier(let t6, _) = class6 else {
-            fatalError("❌ Test 6 Failed: True auth gate without article must be .accessControlBarrier")
+        if case .accessControlBarrier(let t6, _) = class6 {
+            suite.check(t6 == .authenticationRequired, "❌ Test 6 Failed: Barrier type must be .authenticationRequired")
+        } else {
+            suite.check(false, "❌ Test 6 Failed: True auth gate without article must be .accessControlBarrier (Got \(class6))")
         }
-        assert(t6 == .authenticationRequired, "❌ Test 6 Failed: Barrier type must be .authenticationRequired")
 
         // Test 7: Malicious Webpage with XSS Injection -> Sanitizer Neutralizes All Active Scripts
         let maliciousHTML = """
@@ -897,13 +964,13 @@ public struct SelfTestRunner {
         </article>
         """
         let sanitized = sanitizer.sanitizeHTML(maliciousHTML)
-        assert(!sanitized.contains("<script>"), "❌ Test 7 Failed: <script> tags must be completely stripped")
-        assert(!sanitized.contains("alert("), "❌ Test 7 Failed: alert() calls must be stripped")
-        assert(!sanitized.contains("onerror"), "❌ Test 7 Failed: onerror event handler must be stripped")
-        assert(!sanitized.contains("javascript:"), "❌ Test 7 Failed: javascript: pseudo-protocols must be stripped")
-        assert(!sanitized.contains("<iframe"), "❌ Test 7 Failed: <iframe> must be stripped")
-        assert(!sanitized.contains("style="), "❌ Test 7 Failed: style attributes must be stripped")
-        assert(sanitized.contains("Safe content paragraph."), "❌ Test 7 Failed: Legitimate content must be preserved")
+        suite.check(!sanitized.contains("<script>"), "❌ Test 7 Failed: <script> tags must be completely stripped")
+        suite.check(!sanitized.contains("alert("), "❌ Test 7 Failed: alert() calls must be stripped")
+        suite.check(!sanitized.contains("onerror"), "❌ Test 7 Failed: onerror event handler must be stripped")
+        suite.check(!sanitized.contains("javascript:"), "❌ Test 7 Failed: javascript: pseudo-protocols must be stripped")
+        suite.check(!sanitized.contains("<iframe"), "❌ Test 7 Failed: <iframe> must be stripped")
+        suite.check(!sanitized.contains("style="), "❌ Test 7 Failed: style attributes must be stripped")
+        suite.check(sanitized.contains("Safe content paragraph."), "❌ Test 7 Failed: Legitimate content must be preserved")
 
         // Test 8: Extremely Large Webpage -> Memory Controlled & Non-Freezing
         var largeHTML = "<!DOCTYPE html><html><body><h1>Large Archive Document</h1>"
@@ -912,8 +979,8 @@ public struct SelfTestRunner {
         }
         largeHTML += "</body></html>"
         let largeArticle = extractor.extractArticleFromRawHTML(largeHTML, sourceURL: URL(string: "https://example.com/archive"))
-        assert(largeArticle.wordCount > 10000, "❌ Test 8 Failed: Large article words must be accurately counted")
-        assert(largeArticle.estimatedReadingMinutes >= 45, "❌ Test 8 Failed: Reading time must be estimated")
+        suite.check(largeArticle.wordCount > 10000, "❌ Test 8 Failed: Large article words must be accurately counted")
+        suite.check(largeArticle.estimatedReadingMinutes >= 45, "❌ Test 8 Failed: Reading time must be estimated")
 
         // Test 9: JavaScript-heavy DOM Payload Inspection
         let payload9 = DOMInspectionPayload(
@@ -930,37 +997,43 @@ public struct SelfTestRunner {
             extractedArticleHTML: "<p>Synaptic plasticity represents the foundational mechanism of biological and artificial neural adaptation.</p>"
         )
         let class9 = detector.classify(payload: payload9)
-        guard case .presentationBarrier(let t9, let full9) = class9 else {
-            fatalError("❌ Test 9 Failed: Rendered DOM payload with overlay must be classified as .presentationBarrier")
+        if case .presentationBarrier(let t9, let full9) = class9 {
+            suite.check(t9 == .loginModalOverlay, "❌ Test 9 Failed: Barrier type must be .loginModalOverlay")
+            suite.check(full9 == true, "❌ Test 9 Failed: Full content must be available in DOM")
+        } else {
+            suite.check(false, "❌ Test 9 Failed: Rendered DOM payload with overlay must be classified as .presentationBarrier (Got \(class9))")
         }
-        assert(t9 == .loginModalOverlay, "❌ Test 9 Failed: Barrier type must be .loginModalOverlay")
-        assert(full9 == true, "❌ Test 9 Failed: Full content must be available in DOM")
 
         // Test 10: Redirect Chain -> Safe Public Redirect Followed, Unsafe Protocol Rejected
         let safeRedirect = WallClassification.redirectInterstitial(targetURL: URL(string: "https://trustednews.org/final-article")!)
         let decision10A = decisionEngine.decide(classification: safeRedirect, payload: DOMInspectionPayload(), sourceURL: nil)
-        guard case .followSafeRedirect(let targetURL, _) = decision10A else {
-            fatalError("❌ Test 10A Failed: Safe HTTPS redirect must be approved")
+        if case .followSafeRedirect(let targetURL, _) = decision10A {
+            suite.check(targetURL.absoluteString == "https://trustednews.org/final-article", "❌ Test 10A Failed: Target URL must match")
+        } else {
+            suite.check(false, "❌ Test 10A Failed: Safe HTTPS redirect must be approved")
         }
-        assert(targetURL.absoluteString == "https://trustednews.org/final-article", "❌ Test 10A Failed: Target URL must match")
 
         let unsafeRedirect = WallClassification.redirectInterstitial(targetURL: URL(string: "javascript:alert(1)")!)
         let decision10B = decisionEngine.decide(classification: unsafeRedirect, payload: DOMInspectionPayload(), sourceURL: nil)
-        guard case .unsupported(let res10B) = decision10B else {
-            fatalError("❌ Test 10B Failed: Unsafe javascript: redirect MUST be rejected")
+        if case .unsupported(let res10B) = decision10B {
+            suite.check(res10B.isRefusal == true, "❌ Test 10B Failed: Unsafe redirect must be flagged as refusal")
+        } else {
+            suite.check(false, "❌ Test 10B Failed: Unsafe javascript: redirect MUST be rejected")
         }
-        assert(res10B.isRefusal == true, "❌ Test 10B Failed: Unsafe redirect must be flagged as refusal")
 
-        print("  ✓ Test 1: Normal public webpage correctly identified (.none).")
-        print("  ✓ Test 2: Public article with login overlay detected; Clean Reading View extracted.")
-        print("  ✓ Test 3: Signup-required page with underlying article cleanly extracted.")
-        print("  ✓ Test 4: Paid subscription paywall strictly refused (Non-Circumvention enforced).")
-        print("  ✓ Test 5: CAPTCHA / bot verification challenge strictly refused (Non-Circumvention enforced).")
-        print("  ✓ Test 6: Private authenticated portal strictly refused (No credentials guessed/forged).")
-        print("  ✓ Test 7: Malicious webpage: 100% XSS, script injection, and javascript: protocols neutralized.")
-        print("  ✓ Test 8: Large webpage: 10,000+ words parsed in milliseconds without browser freeze.")
-        print("  ✓ Test 9: Rendered DOM inspection: Structured payload classified with overlay selectors.")
-        print("  ✓ Test 10: Redirect chain: Safe HTTPS redirect approved; malicious javascript: URL rejected.")
+        if suite.status == .passed {
+            print("  ✓ Test 1: Normal public webpage correctly identified (.none).")
+            print("  ✓ Test 2: Public article with login overlay detected; Clean Reading View extracted.")
+            print("  ✓ Test 3: Signup-required page with underlying article cleanly extracted.")
+            print("  ✓ Test 4: Paid subscription paywall strictly refused (Non-Circumvention enforced).")
+            print("  ✓ Test 5: CAPTCHA / bot verification challenge strictly refused (Non-Circumvention enforced).")
+            print("  ✓ Test 6: Private authenticated portal strictly refused (No credentials guessed/forged).")
+            print("  ✓ Test 7: Malicious webpage: 100% XSS, script injection, and javascript: protocols neutralized.")
+            print("  ✓ Test 8: Large webpage: 10,000+ words parsed in milliseconds without browser freeze.")
+            print("  ✓ Test 9: Rendered DOM inspection: Structured payload classified with overlay selectors.")
+            print("  ✓ Test 10: Redirect chain: Safe HTTPS redirect approved; malicious javascript: URL rejected.")
+        }
+        return suite
     }
 
     public static func runLiveCrawlTest(query: String) {

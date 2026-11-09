@@ -115,7 +115,7 @@ public final class InformationSorter: @unchecked Sendable {
 
         // 1. FINANCIAL ASSET & EQUITY INTELLIGENCE
         } else if intentCategory.contains("Financial") {
-            let finResult = FinancialAnalysisEngine.shared.computeAnalysisSync(query: query, items: items)
+            let finResult = FinancialAnalysisEngine.shared.computeAnalysisSync(query: query, items: items, facts: gatheringResult.facts)
             tableHeaders = finResult.tableHeaders
             structuredRecords = finResult.structuredRecords
             executiveSummary = finResult.executiveSummary
@@ -174,11 +174,21 @@ public final class InformationSorter: @unchecked Sendable {
 
         // 3. UNIVERSAL ENCYCLOPEDIC & GENERAL KNOWLEDGE
         } else {
-            tableHeaders = ["Key Dimension / Topic", "Verified Factual Extract", "Source Citation", "Confidence Score"]
+            let topicHeader: String
+            if intentCategory.contains("Study") {
+                topicHeader = "Educational Topic / Concept"
+            } else if intentCategory.contains("Research") {
+                topicHeader = "Research Topic / Paper"
+            } else if intentCategory.contains("Entertainment") {
+                topicHeader = "Work / Subject / Artist"
+            } else {
+                topicHeader = "Key Dimension / Topic"
+            }
+            tableHeaders = [topicHeader, "Verified Factual Extract", "Source Citation", "Confidence Score"]
             for item in items.prefix(6) {
                 let title = item.sectionTitle.isEmpty || item.sectionTitle == "Substantive Extract" ? item.sourceTitle : item.sectionTitle
                 structuredRecords.append([
-                    "Key Dimension / Topic": title,
+                    topicHeader: title,
                     "Verified Factual Extract": item.extractedSnippet,
                     "Source Citation": item.sourceTitle,
                     "Confidence Score": "\(Int(item.relevanceScore * 100))% Verified"

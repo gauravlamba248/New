@@ -36,20 +36,20 @@ public final class BypassWallSanitizer: Sendable {
         }
 
         // 2. Strip all inline JavaScript event handlers (e.g., onload, onclick, onerror, onmouseover)
-        let eventHandlerPattern = "(?i)\\s+on[a-z0-9_-]+\\s*=\\s*([\"'][^\"']*[\"']|[^\\s>]+)"
+        let eventHandlerPattern = "(?i)\\s+on[a-z0-9_-]+\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)"
         clean = clean.replacingOccurrences(of: eventHandlerPattern, with: "", options: .regularExpression)
 
         // 3. Neutralize dangerous pseudo-protocols in href/src (javascript:, vbscript:, data:, file:)
         let dangerousProtocols = [
-            "(?i)href\\s*=\\s*[\"']?\\s*(javascript|vbscript|data|file|about):[^\"'>\\s]*[\"']?",
-            "(?i)src\\s*=\\s*[\"']?\\s*(javascript|vbscript|data|file|about):[^\"'>\\s]*[\"']?"
+            "(?i)\\s+href\\s*=\\s*(\"\\s*(javascript|vbscript|data|file|about):[^\"]*\"|'\\s*(javascript|vbscript|data|file|about):[^']*'|\\s*(javascript|vbscript|data|file|about):[^\\s>]+)",
+            "(?i)\\s+src\\s*=\\s*(\"\\s*(javascript|vbscript|data|file|about):[^\"]*\"|'\\s*(javascript|vbscript|data|file|about):[^']*'|\\s*(javascript|vbscript|data|file|about):[^\\s>]+)"
         ]
         for dp in dangerousProtocols {
             clean = clean.replacingOccurrences(of: dp, with: "", options: .regularExpression)
         }
 
         // 4. Strip style attributes to prevent CSS expression() injection and UI spoofing
-        let stylePattern = "(?i)\\s+style\\s*=\\s*([\"'][^\"']*[\"']|[^\\s>]+)"
+        let stylePattern = "(?i)\\s+style\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)"
         clean = clean.replacingOccurrences(of: stylePattern, with: "", options: .regularExpression)
 
         return clean.trimmingCharacters(in: .whitespacesAndNewlines)
