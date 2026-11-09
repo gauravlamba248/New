@@ -152,21 +152,7 @@ public final class FinancialAnalysisEngine: @unchecked Sendable {
     // MARK: - Entity Resolution Integration (Strict Non-Substitution)
 
     public func resolveCompanySync(query: String) -> (ticker: String, name: String, cik: String) {
-        let clean = EntityResolver.shared.cleanEntityQuery(query)
-        // If query is an unverified token, do NOT substitute Tesla!
-        if clean.lowercased().contains("nonexistent") || clean.lowercased().contains("unknown") {
-            return ("UNVERIFIED", clean, "")
-        }
-        let lower = clean.lowercased()
-        if lower.contains("ford") || lower == "f" { return ("F", "Ford Motor Company", "0000037996") }
-        if lower.contains("tesla") || lower == "tsla" { return ("TSLA", "Tesla, Inc.", "0001318605") }
-        if lower.contains("apple") || lower == "aapl" { return ("AAPL", "Apple Inc.", "0000320193") }
-        if lower.contains("boeing") || lower == "ba" { return ("BA", "The Boeing Company", "0000012927") }
-        if lower.contains("pfizer") || lower == "pfe" { return ("PFE", "Pfizer Inc.", "0000078003") }
-        if lower.contains("microsoft") || lower == "msft" { return ("MSFT", "Microsoft Corporation", "0000789019") }
-        if lower.contains("nvidia") || lower == "nvda" { return ("NVDA", "NVIDIA Corporation", "0001045810") }
-        if lower.contains("adidas") { return ("ADS.DE", "Adidas AG", "0000000000") }
-        return ("UNVERIFIED", clean, "")
+        return EntityResolver.shared.resolveCompanySync(query: query)
     }
 
     public func resolveCompany(query: String) async -> (ticker: String, name: String, cik: String) {

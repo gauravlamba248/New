@@ -248,26 +248,28 @@ public final class WebDataCrawler: @unchecked Sendable {
             let name = entity.cleanEntityName
             let cleanSlug = name.replacingOccurrences(of: " ", with: "_").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
 
-            // 1. Official Corporate Domain
+            // 1. Official Corporate Domain & Primary Portals
             if let dom = entity.officialDomain, let u = URL(string: "https://\(dom)") { urls.append(u) }
-
-            // 2. Official News / Press
+            if let dom = entity.officialDomain, let u = URL(string: "https://\(dom)/about-us") { urls.append(u) }
             if let dom = entity.officialDomain, let u = URL(string: "https://\(dom)/news") { urls.append(u) }
 
-            // 3. Wikipedia Corporate Profile
+            // 2. Wikipedia Corporate Structure & Group Portals
             if let u = URL(string: "https://en.wikipedia.org/wiki/\(cleanSlug)") { urls.append(u) }
+            if name.lowercased().contains("tata"), let u = URL(string: "https://en.wikipedia.org/wiki/List_of_entities_associated_with_Tata_Group") { urls.append(u) }
+            if name.lowercased().contains("tata"), let u = URL(string: "https://en.wikipedia.org/wiki/Tata_Sons") { urls.append(u) }
+            if name.lowercased().contains("reliance"), let u = URL(string: "https://en.wikipedia.org/wiki/Reliance_Industries") { urls.append(u) }
 
-            // 4. Wikidata Entity API
+            // 3. Wikidata Knowledge Entity
             if let enc = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
                let u = URL(string: "https://www.wikidata.org/w/api.php?action=wbsearchentities&search=\(enc)&language=en&format=json") { urls.append(u) }
+
+            // 4. CrossRef Corporate & Technical Publications
+            if let enc = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+               let u = URL(string: "https://api.crossref.org/works?query=\(enc)&rows=4") { urls.append(u) }
 
             // 5. DuckDuckGo Corporate Intelligence Card
             if let enc = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
                let u = URL(string: "https://api.duckduckgo.com/?q=\(enc)+company+profile&format=json") { urls.append(u) }
-
-            // 6. CrossRef Publications
-            if let enc = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-               let u = URL(string: "https://api.crossref.org/works?query=\(enc)&rows=4") { urls.append(u) }
 
         case .techProject:
             let repoSlug = entity.primaryIdentifier // e.g. "kubernetes/kubernetes"

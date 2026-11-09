@@ -766,8 +766,10 @@ public struct SelfTestRunner {
         )
         assert(finDossier.structuredRecords.contains(where: { $0["Observed Reading / Value"]?.contains("358.22") == true }), "❌ Dossier structured table must contain $358.22 for Tesla stock")
 
-        // 6. Test Entity Resolver & Absolute Non-Substitution Guard
+        // 6. Test Entity Resolver & Absolute Non-Substitution Guard (US, Indian & Global Multi-Registry)
         let resolver = EntityResolver.shared
+
+        // A. US Equities
         let fordRes = resolver.resolveCompanySync(query: "financial analysis of Ford")
         assert(fordRes.ticker == "F", "❌ Ford must resolve to ticker 'F' (Got \(fordRes.ticker))")
         assert(fordRes.ticker != "TSLA", "❌ CRITICAL: Ford MUST NOT evaluate as Tesla")
@@ -781,13 +783,79 @@ public struct SelfTestRunner {
         let pfizerRes = resolver.resolveCompanySync(query: "financial analysis of Pfizer")
         assert(pfizerRes.ticker == "PFE", "❌ Pfizer must resolve to ticker 'PFE'")
 
+        // B. European & Asian Multinationals
         let adidasRes = resolver.resolveCompanySync(query: "financial analysis of Adidas")
         assert(adidasRes.ticker == "ADS.DE", "❌ Adidas must resolve to 'ADS.DE' (Got \(adidasRes.ticker))")
         assert(adidasRes.ticker != "TSLA", "❌ CRITICAL: Adidas MUST NOT evaluate as Tesla")
 
+        let siemensRes = resolver.resolveCompanySync(query: "financial analysis of Siemens")
+        assert(siemensRes.ticker == "SIE.DE", "❌ Siemens must resolve to 'SIE.DE' (Got \(siemensRes.ticker))")
+
+        let samsungRes = resolver.resolveCompanySync(query: "financial analysis of Samsung")
+        assert(samsungRes.ticker == "005930.KS", "❌ Samsung must resolve to '005930.KS' (Got \(samsungRes.ticker))")
+
+        let toyotaRes = resolver.resolveCompanySync(query: "financial analysis of Toyota")
+        assert(toyotaRes.ticker == "TM", "❌ Toyota must resolve to 'TM' (Got \(toyotaRes.ticker))")
+
+        // C. Indian Public Equities (NSE/BSE)
+        let relianceRes = resolver.resolveCompanySync(query: "financial analysis of Reliance Industries")
+        assert(relianceRes.ticker == "RELIANCE.NS", "❌ Reliance must resolve to 'RELIANCE.NS' (Got \(relianceRes.ticker))")
+
+        let infosysRes = resolver.resolveCompanySync(query: "financial analysis of Infosys")
+        assert(infosysRes.ticker == "INFY.NS", "❌ Infosys must resolve to 'INFY.NS' (Got \(infosysRes.ticker))")
+
+        let tcsRes = resolver.resolveCompanySync(query: "financial analysis of TCS")
+        assert(tcsRes.ticker == "TCS.NS", "❌ TCS must resolve to 'TCS.NS' (Got \(tcsRes.ticker))")
+
+        let hdfcRes = resolver.resolveCompanySync(query: "financial analysis of HDFC Bank")
+        assert(hdfcRes.ticker == "HDFCBANK.NS", "❌ HDFC Bank must resolve to 'HDFCBANK.NS' (Got \(hdfcRes.ticker))")
+
+        let iciciRes = resolver.resolveCompanySync(query: "financial analysis of ICICI Bank")
+        assert(iciciRes.ticker == "ICICIBANK.NS", "❌ ICICI Bank must resolve to 'ICICIBANK.NS' (Got \(iciciRes.ticker))")
+
+        let itcRes = resolver.resolveCompanySync(query: "financial analysis of ITC")
+        assert(itcRes.ticker == "ITC.NS", "❌ ITC must resolve to 'ITC.NS' (Got \(itcRes.ticker))")
+
+        let ltRes = resolver.resolveCompanySync(query: "financial analysis of Larsen & Toubro")
+        assert(ltRes.ticker == "LT.NS", "❌ Larsen & Toubro must resolve to 'LT.NS' (Got \(ltRes.ticker))")
+
+        // D. Indian Conglomerates & Unlisted Subsidiaries (Tata Industries & Tata Sons)
+        let tataInd = resolver.resolveSync(rawQuery: "Financial analysis of TATA industries")
+        assert(tataInd.isVerified, "❌ 'Financial analysis of TATA industries' MUST be verified!")
+        assert(tataInd.cleanEntityName == "Tata Industries Limited", "❌ Canonical name must be 'Tata Industries Limited'")
+        assert(tataInd.entityType == .privateCompany, "❌ Tata Industries must be classified as .privateCompany")
+        assert(tataInd.officialDomain == "tata.com", "❌ Tata Industries domain must be tata.com")
+
+        // Comprehensive Tata Industries phrasing & capitalization variations
+        let tataPhrasings = [
+            "Financial analysis of Tata Industries",
+            "Financial analysis of Tata industries",
+            "Analyze Tata Industries",
+            "Tata Industries financial analysis",
+            "Financials of Tata Industries",
+            "Tata Industries revenue",
+            "Tata Industries annual report",
+            "What is the financial performance of Tata Industries?",
+            "Tata Industries Ltd",
+            "Tata Industries Limited",
+            "Tata group company Tata Industries"
+        ]
+        for phrase in tataPhrasings {
+            let res = resolver.resolveSync(rawQuery: phrase)
+            assert(res.isVerified, "❌ Phrasing '\(phrase)' must be successfully resolved and verified!")
+            assert(res.cleanEntityName == "Tata Industries Limited", "❌ '\(phrase)' must resolve to 'Tata Industries Limited'")
+        }
+
+        let tataSonsRes = resolver.resolveSync(rawQuery: "analyze company Tata Sons")
+        assert(tataSonsRes.isVerified, "❌ Tata Sons must be verified")
+        assert(tataSonsRes.cleanEntityName == "Tata Sons Private Limited", "❌ Tata Sons canonical name must match")
+
+        // E. Unknown / Ambiguous Rejection under Absolute Non-Substitution Guard
         let nonExistentRes = resolver.resolveCompanySync(query: "financial analysis of NonExistentCorpXYZ")
         assert(nonExistentRes.ticker == "UNVERIFIED", "❌ NonExistentCorpXYZ must resolve to 'UNVERIFIED' (Got \(nonExistentRes.ticker))")
         assert(nonExistentRes.ticker != "TSLA", "❌ CRITICAL: NonExistentCorpXYZ MUST NOT default to Tesla")
+        let nonExistentFull = resolver.resolveSync(rawQuery: "financial analysis of NonExistentCorpXYZ")
+        assert(!nonExistentFull.isVerified, "❌ NonExistentCorpXYZ must have isVerified == false")
 
         // 7. Test Strict Provenanced Fact-Based Formula Calculations (Zero Dummy Defaults)
         let appleEntity = EntityIdentity(
