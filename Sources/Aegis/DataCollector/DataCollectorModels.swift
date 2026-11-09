@@ -50,6 +50,7 @@ public struct EntityIdentity: Identifiable, Codable, Sendable {
     public var primaryIdentifier: String   // Ticker (e.g. "F"), CIK ("0000037996"), Domain ("ford.com"), GitHub ("kubernetes/kubernetes")
     public var canonicalTitle: String      // "Ford Motor Company"
     public var officialDomain: String?
+    public var jurisdiction: String        // "India", "US", "Germany", "Japan", "South Korea", "UK", "Global"
     public var confidenceScore: Double     // 0.0 to 1.0
     public var verificationSources: [String]
     public var isVerified: Bool
@@ -64,6 +65,7 @@ public struct EntityIdentity: Identifiable, Codable, Sendable {
         primaryIdentifier: String,
         canonicalTitle: String,
         officialDomain: String? = nil,
+        jurisdiction: String = "Global",
         confidenceScore: Double = 1.0,
         verificationSources: [String] = [],
         isVerified: Bool = true,
@@ -77,6 +79,7 @@ public struct EntityIdentity: Identifiable, Codable, Sendable {
         self.primaryIdentifier = primaryIdentifier
         self.canonicalTitle = canonicalTitle
         self.officialDomain = officialDomain
+        self.jurisdiction = jurisdiction
         self.confidenceScore = confidenceScore
         self.verificationSources = verificationSources
         self.isVerified = isVerified
@@ -91,6 +94,7 @@ public struct EntityIdentity: Identifiable, Codable, Sendable {
             analysisType: .universalTopic,
             primaryIdentifier: "UNVERIFIED",
             canonicalTitle: "Unverified Entity: \(query)",
+            jurisdiction: "Unknown",
             confidenceScore: 0.0,
             verificationSources: [],
             isVerified: false,
@@ -131,6 +135,66 @@ public enum SourceQualityTier: String, Codable, Sendable {
     case rejected = "REJECTED"
 }
 
+// MARK: - Granular Source Type (Section 12 Hierarchy)
+
+public enum GranularSourceType: String, Codable, Sendable {
+    case officialCompany     = "OFFICIAL_COMPANY"
+    case regulator           = "REGULATOR"
+    case stockExchange       = "STOCK_EXCHANGE"
+    case governmentRegistry  = "GOVERNMENT_REGISTRY"
+    case financialDatabase   = "FINANCIAL_DATABASE"
+    case specialistFinancial = "SPECIALIST_FINANCIAL"
+    case reputableNews       = "REPUTABLE_NEWS"
+    case industryPublication = "INDUSTRY_PUBLICATION"
+    case research            = "RESEARCH"
+    case generalReference    = "GENERAL_REFERENCE"
+    case lowValue            = "LOW_VALUE"
+    case irrelevant          = "IRRELEVANT"
+
+    public var tierNumber: Int {
+        switch self {
+        case .officialCompany: return 1
+        case .regulator, .stockExchange, .governmentRegistry: return 2
+        case .financialDatabase, .specialistFinancial: return 3
+        case .reputableNews, .industryPublication: return 4
+        case .research, .generalReference: return 5
+        case .lowValue, .irrelevant: return 6
+        }
+    }
+
+    public var tierDescription: String {
+        switch tierNumber {
+        case 1: return "Tier 1: Official Company Primary Source"
+        case 2: return "Tier 2: Regulatory & Stock Exchange Repository"
+        case 3: return "Tier 3: Specialist Financial Database"
+        case 4: return "Tier 4: Reputable News & Industry Publication"
+        case 5: return "Tier 5: General Reference / Encyclopedic"
+        case 6: return "Tier 6: Low Value / Rejected"
+        default: return "Unknown Tier"
+        }
+    }
+}
+
+public enum DiagnosticFailureMode: String, Codable, Sendable {
+    case none                                    = "NONE"
+    case noEntityResolved                        = "NO_ENTITY_RESOLVED"
+    case noAuthoritativeSourcesDiscovered        = "NO_AUTHORITATIVE_SOURCES_DISCOVERED"
+    case sourcesRejectedDueToEntityMismatch      = "SOURCES_REJECTED_DUE_TO_ENTITY_MISMATCH"
+    case networkRetrievalFailed                  = "NETWORK_RETRIEVAL_FAILED"
+    case extractionFailed                        = "EXTRACTION_FAILED"
+
+    public var diagnosticTitle: String {
+        switch self {
+        case .none: return "Normal Operation"
+        case .noEntityResolved: return "No Entity Resolved (Query Ambiguous or Unrecognized)"
+        case .noAuthoritativeSourcesDiscovered: return "Entity Resolved, but No Authoritative Sources Discovered"
+        case .sourcesRejectedDueToEntityMismatch: return "Sources Discovered but Rejected (Entity Mismatch Protection)"
+        case .networkRetrievalFailed: return "Network Retrieval Failed (Offline or Host Unreachable)"
+        case .extractionFailed: return "Data Extraction Failed (Payload Obfuscated or Unstructured)"
+        }
+    }
+}
+
 public struct SourceLedgerEntry: Identifiable, Codable, Sendable {
     public var id: UUID
     public var url: URL
@@ -146,6 +210,18 @@ public struct SourceLedgerEntry: Identifiable, Codable, Sendable {
     public var underlyingSource: String?   // e.g. "Reuters Wire", "PR Newswire", "SEC EDGAR"
     public var rejectionReason: String?
 
+    // Granular Provenance & Explainability (Section 11, 12 & 23)
+    public var sourceType: GranularSourceType
+    public var authorityLevel: String
+    public var jurisdiction: String
+    public var entityMatchScore: Double
+    public var informationTypes: [String]
+    public var publicationDate: Date?
+    public var retrievalDate: Date
+    public var qualityScore: Double
+    public var selectionReason: String
+    public var whyThisSource: String
+
     public init(
         id: UUID = UUID(),
         url: URL,
@@ -159,7 +235,17 @@ public struct SourceLedgerEntry: Identifiable, Codable, Sendable {
         extractedFactsCount: Int = 0,
         independenceGroupID: String,
         underlyingSource: String? = nil,
-        rejectionReason: String? = nil
+        rejectionReason: String? = nil,
+        sourceType: GranularSourceType = .generalReference,
+        authorityLevel: String = "Tier 5: General Reference",
+        jurisdiction: String = "Global",
+        entityMatchScore: Double = 1.0,
+        informationTypes: [String] = [],
+        publicationDate: Date? = nil,
+        retrievalDate: Date = Date(),
+        qualityScore: Double = 0.5,
+        selectionReason: String = "",
+        whyThisSource: String = ""
     ) {
         self.id = id
         self.url = url
@@ -174,6 +260,16 @@ public struct SourceLedgerEntry: Identifiable, Codable, Sendable {
         self.independenceGroupID = independenceGroupID
         self.underlyingSource = underlyingSource
         self.rejectionReason = rejectionReason
+        self.sourceType = sourceType
+        self.authorityLevel = authorityLevel
+        self.jurisdiction = jurisdiction
+        self.entityMatchScore = entityMatchScore
+        self.informationTypes = informationTypes
+        self.publicationDate = publicationDate
+        self.retrievalDate = retrievalDate
+        self.qualityScore = qualityScore
+        self.selectionReason = selectionReason
+        self.whyThisSource = whyThisSource
     }
 }
 
@@ -188,6 +284,8 @@ public struct SourceLedger: Codable, Sendable {
     public var actuallyUsedCount: Int
     public var rejectedCount: Int
     public var independentGroupsCount: Int
+    public var diagnosticFailureMode: DiagnosticFailureMode
+    public var diagnosticExplanation: String?
     public var entries: [SourceLedgerEntry]
 
     public init(
@@ -201,6 +299,8 @@ public struct SourceLedger: Codable, Sendable {
         actuallyUsedCount: Int = 0,
         rejectedCount: Int = 0,
         independentGroupsCount: Int = 0,
+        diagnosticFailureMode: DiagnosticFailureMode = .none,
+        diagnosticExplanation: String? = nil,
         entries: [SourceLedgerEntry] = []
     ) {
         self.requestedCount = requestedCount
@@ -213,6 +313,8 @@ public struct SourceLedger: Codable, Sendable {
         self.actuallyUsedCount = actuallyUsedCount
         self.rejectedCount = rejectedCount
         self.independentGroupsCount = independentGroupsCount
+        self.diagnosticFailureMode = diagnosticFailureMode
+        self.diagnosticExplanation = diagnosticExplanation
         self.entries = entries
     }
 }

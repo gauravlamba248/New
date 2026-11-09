@@ -58,18 +58,23 @@ public final class InformationGatherer: @unchecked Sendable {
 
         for site in rawWebsites {
             rawTotalBytes += Int64(site.byteSize)
-            let (items, siteFacts) = processSingleWebsite(
+            let (items, siteLegacyFacts) = processSingleWebsite(
                 site: site,
                 entity: entity,
                 queryKeywords: queryKeywords,
                 originalQuery: userQuery
             )
+            // Advanced 13-Field Provenanced Fact Extraction (Section 15)
+            let extractedProvenancedFacts = FactExtractor.shared.extractFacts(from: site, entity: entity)
+
             cleanedItems.append(contentsOf: items)
-            facts.append(contentsOf: siteFacts)
+            facts.append(contentsOf: extractedProvenancedFacts.isEmpty ? siteLegacyFacts : extractedProvenancedFacts)
         }
 
-        // Deduplicate and reconcile conflicts
-        let (reconciledFacts, conflicts) = reconcileAndDetectConflicts(facts: facts)
+        // Cross-Verification & Conflict Resolution across Independent Sources (Section 14)
+        let validation = CrossValidator.shared.validate(facts: facts)
+        let reconciledFacts = validation.reconciledFacts
+        let conflicts = validation.conflicts
 
         let usefulBytes = cleanedItems.reduce(0) { $0 + Int64($1.extractedSnippet.utf8.count) }
         let garbageBytes = max(0, rawTotalBytes - usefulBytes)

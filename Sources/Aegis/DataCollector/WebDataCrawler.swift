@@ -22,11 +22,18 @@ public final class WebDataCrawler: @unchecked Sendable {
         countLimit: Int,
         onProgress: @escaping @Sendable (Int, Int, String) -> Void
     ) async throws -> (websites: [RawWebsiteData], ledger: SourceLedger) {
-        // 1. Discover Entity-Specific Candidate URLs
-        let candidateURLs = await discoverCandidateURLs(for: entity, limit: max(countLimit * 2, 10))
+        // 1. Detect Jurisdiction (Section 4 & 8)
+        let jurisdiction = JurisdictionDetector.shared.detect(entity: entity)
+
+        // 2. Discover Entity-Specific Candidate URLs across All 6 Tiers (Section 3 to 10)
+        let candidateURLs = await SourceDiscoverer.shared.discoverSources(
+            for: entity,
+            jurisdiction: jurisdiction,
+            requestedLimit: max(countLimit * 3, 12)
+        )
         let discoveredCount = candidateURLs.count
 
-        // 2. Evaluate Sources: Quality, Authority & Independence
+        // 3. Classify, Validate Entity Match & Evaluate Quality for Every Source (Section 11, 12 & 13)
         var candidateEntries: [SourceLedgerEntry] = []
         var seenDomains: [String: Int] = [:]
 
@@ -36,37 +43,57 @@ public final class WebDataCrawler: @unchecked Sendable {
             let groupCount = (seenDomains[domainGroup] ?? 0) + 1
             seenDomains[domainGroup] = groupCount
 
-            let (cat, quality, authScore) = evaluateSourceQuality(url: u, entity: entity)
+            let (sourceType, _, _, infoTypes) = SourceClassifier.shared.classify(url: u, entity: entity)
+            let entityMatch = EntityMatchValidator.shared.validateMatch(url: u, pageTitle: host, pageSnippet: "", entity: entity)
+            let assessment = SourceQualityEvaluator.shared.evaluate(
+                url: u,
+                sourceType: sourceType,
+                entityMatch: entityMatch,
+                entity: entity,
+                jurisdiction: jurisdiction
+            )
 
             let entry = SourceLedgerEntry(
                 url: u,
                 domain: host,
-                category: cat,
-                qualityTier: quality,
+                category: mapToSourceCategory(sourceType),
+                qualityTier: assessment.qualityTier,
                 stage: .candidate,
-                authorityScore: authScore,
+                authorityScore: assessment.authorityScore,
                 freshnessDate: Date(),
                 httpStatus: nil,
                 extractedFactsCount: 0,
                 independenceGroupID: "\(domainGroup)_cluster_\(groupCount)",
                 underlyingSource: domainGroup,
-                rejectionReason: quality == .rejected ? "Domain below minimum authority threshold" : nil
+                rejectionReason: !entityMatch.isAcceptable ? entityMatch.explanation : (assessment.qualityTier == .rejected ? "Domain below minimum authority threshold" : nil),
+                sourceType: sourceType,
+                authorityLevel: sourceType.tierDescription,
+                jurisdiction: jurisdiction.country,
+                entityMatchScore: entityMatch.matchScore,
+                informationTypes: infoTypes,
+                publicationDate: Date(),
+                retrievalDate: Date(),
+                qualityScore: assessment.finalScore,
+                selectionReason: assessment.selectionJustification,
+                whyThisSource: assessment.selectionJustification
             )
             candidateEntries.append(entry)
         }
 
-        let qualifyingCandidates = candidateEntries.filter { $0.qualityTier != .rejected }
-        let candidateCount = qualifyingCandidates.count
+        let qualifyingCount = candidateEntries.filter { $0.qualityTier != .rejected && $0.entityMatchScore >= 0.60 }.count
 
-        // 3. Select Qualifying Candidates up to User-Requested Limit
-        let selectedCount = min(qualifyingCandidates.count, countLimit)
-        let selectedCandidates = Array(qualifyingCandidates.prefix(selectedCount))
+        // 4. Source Selection with Diversity & Budget Enforcement (Section 16)
+        let (selectedCandidates, allEvaluatedEntries) = SourceSelector.shared.selectSources(
+            candidates: candidateEntries,
+            budgetLimit: countLimit
+        )
+        let selectedCount = selectedCandidates.count
 
         var results: [RawWebsiteData] = []
         var updatedEntries: [SourceLedgerEntry] = []
         var accessedCount = 0
 
-        // 4. Fetch Each Selected Website
+        // 5. Fetch Each Selected Website
         for (index, targetEntry) in selectedCandidates.enumerated() {
             let targetURL = targetEntry.url
             let host = targetURL.host ?? targetURL.absoluteString
@@ -99,25 +126,27 @@ public final class WebDataCrawler: @unchecked Sendable {
             }
         }
 
-        // Add remaining non-selected candidates to the ledger for transparent tracking
-        for entry in candidateEntries where !selectedCandidates.contains(where: { $0.url == entry.url }) {
-            var copy = entry
-            if copy.qualityTier == .rejected {
-                copy.stage = .rejected
-            } else {
-                copy.stage = .discovered
-                copy.rejectionReason = "Candidate available but budget limit reached (Requested: \(countLimit))"
-            }
-            updatedEntries.append(copy)
+        // Merge remaining evaluated candidates into ledger for complete auditability
+        for entry in allEvaluatedEntries where !selectedCandidates.contains(where: { $0.url == entry.url }) {
+            updatedEntries.append(entry)
         }
 
         let rejectedCount = updatedEntries.filter { $0.stage == .rejected }.count
         let independentGroups = Set(selectedCandidates.map { $0.independenceGroupID }).count
 
+        // 6. Diagnostic Evaluation (Section 20: Zero-Source Result Must Be Diagnostic)
+        let (failureMode, diagExpl, _) = DiagnosticRefusalHandler.shared.diagnose(
+            entity: entity,
+            discoveredCount: discoveredCount,
+            qualifyingCount: qualifyingCount,
+            accessedCount: accessedCount,
+            extractedCount: results.reduce(0, { $0 + $1.byteSize })
+        )
+
         let ledger = SourceLedger(
             requestedCount: countLimit,
             discoveredCount: discoveredCount,
-            candidateCount: candidateCount,
+            candidateCount: qualifyingCount,
             selectedCount: selectedCount,
             accessedCount: accessedCount,
             extractedCount: 0,
@@ -125,10 +154,24 @@ public final class WebDataCrawler: @unchecked Sendable {
             actuallyUsedCount: 0,
             rejectedCount: rejectedCount,
             independentGroupsCount: independentGroups,
+            diagnosticFailureMode: failureMode,
+            diagnosticExplanation: diagExpl,
             entries: updatedEntries
         )
 
         return (results, ledger)
+    }
+
+    private func mapToSourceCategory(_ gt: GranularSourceType) -> SourceCategory {
+        switch gt {
+        case .officialCompany: return .officialEntityDoc
+        case .regulator, .governmentRegistry: return .regulatoryFiling
+        case .stockExchange, .financialDatabase, .specialistFinancial: return .marketExchangeData
+        case .reputableNews, .industryPublication: return .reputableNewsMedia
+        case .research: return .academicJournal
+        case .generalReference: return .encyclopedic
+        case .lowValue, .irrelevant: return .secondaryWeb
+        }
     }
 
     /// Backward-compatible crawlWebsites routing through EntityResolver
